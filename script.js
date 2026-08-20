@@ -5,7 +5,7 @@
     var isBusy = false; // vrai pendant le traitement d'un scan (évite les doublons)
     var isRunning = false; // vrai tant que la caméra scanne activement
     var selectedMode = 'entree';
-    var API_URL = (typeof window !== 'undefined' && window.API_URL) || 'https://script.google.com/macros/s/AKfycbwZPbOUbP6nd9GwT1CkOX-AeSutG6GreKgZQCv5kxts9Y_loZdbFXAF24-MIEkfGwhD/exec';
+    var API_URL = (typeof window !== 'undefined' && window.API_URL) || 'https://script.google.com/macros/s/AKfycbyEBMufa2qRJFxTG1X2WH33COMM-eyJK5QUxoO3eSsLoarY0tIpLUo1OfYerkBww34s/exec';
     var config = { fps: 12, qrbox: { width: 250, height: 250 } };
 
     function setMode(mode) {
@@ -119,6 +119,17 @@
         if (info) info.hidden = false;
     }
 
+    // Le QR est généré au format "| MATRICULE | NOM |" (pipe en tête et en fin).
+    // On découpe par "|", on retire les segments vides/espaces, et on garde le premier
+    // segment non vide restant — c'est le matricule, quel que soit le nombre de pipes.
+    function extraireMatricule(decodedText) {
+        var texte = (decodedText || '').toString();
+        var segments = texte.split('|')
+            .map(function (s) { return s.trim(); })
+            .filter(function (s) { return s !== ''; });
+        return segments.length ? segments[0] : texte.trim();
+    }
+
     function onScanSuccess(decodedText) {
         if (isBusy) return; // ignore les détections répétées pendant le traitement en cours
         isBusy = true;
@@ -126,7 +137,7 @@
         try { html5QrCode.pause(true); } catch (e) {}
         updateStatus('Scan détecté…');
 
-        var matricule = (decodedText || '').toString().split('|')[0].trim() || (decodedText || '').toString().trim();
+        var matricule = extraireMatricule(decodedText);
         traiterMatricule(matricule, reprendreScanApresDelai);
     }
 
@@ -155,14 +166,34 @@
     var watchId = null;
 
     function demarrerSuiviPosition() {
-        if (!navigator.geolocation) return;
+        if (!navigator.geolocation) {
+            majStatutPosition('indisponible (navigateur)');
+            return;
+        }
+        if (window.isSecureContext === false) {
+            // La géolocalisation est bloquée par le navigateur hors HTTPS/localhost.
+            majStatutPosition('bloquée (site non HTTPS)');
+            return;
+        }
+        majStatutPosition('en attente…');
         watchId = navigator.geolocation.watchPosition(
             function (pos) {
                 positionActuelle = { longitude: pos.coords.longitude, latitude: pos.coords.latitude };
+                majStatutPosition('active');
             },
-            function () { /* refusé ou indisponible : on garde '' et on continue */ },
+            function (err) {
+                // refusé ou indisponible : on garde '' et on continue le pointage sans position
+                var raison = (err && err.code === 1) ? 'refusée par l\'utilisateur' : (err && err.code === 2) ? 'position indisponible' : 'délai dépassé';
+                majStatutPosition(raison);
+                console.debug('Erreur géolocalisation:', err);
+            },
             { enableHighAccuracy: false, maximumAge: 60000, timeout: 15000 }
         );
+    }
+
+    function majStatutPosition(texte) {
+        var el = document.getElementById('position-status');
+        if (el) el.textContent = '📍 Position : ' + texte;
     }
 
     // ============================================
